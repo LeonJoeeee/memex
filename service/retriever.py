@@ -89,7 +89,9 @@ def build_user_prompt(
         f"含 frontmatter + 开头）\n"
     )
     for p in candidates:
-        parts.append(read_page_summary(p))
+        # 显式传 root（runtime lookup module-level LLMWIKI_ROOT，让 test
+        # 可 monkeypatch 该常量）
+        parts.append(read_page_summary(p, root=LLMWIKI_ROOT))
 
     parts.append(
         "\n# 任务\n\n按 system prompt 三铁律 + JSON schema，"
