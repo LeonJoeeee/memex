@@ -22,23 +22,44 @@
 3. **Specialist agent service, not general** —— 只做知识管理 / 录入 / 综合 / 查询；不做 dialogue / web search / 任务编排
 4. **Provider 中立** —— OpenAI-compat endpoint 即可（mimo / DeepSeek / OpenAI / Anthropic / 任何）
 
-## 当前状态：Phase 0 spike
+## 当前状态：Phase 1 启动（spike 已 PASS）
 
-正在验证 mimo 能否担纲 wiki digest 任务。
+**Phase 0 spike 结果**：mimo-v2.5 在 prompt 工程后能扛 wiki digest 任务，
+质量 ~95% vs Opus 4.7 baseline (llm-wiki commit cb9d897)，coverage 100%
+(4/4 pages 对齐)。
 
-`spike_digest.py` 是 Milestone 0 验证脚本：
-- 输入：一个 source（默认 llm-wiki 项目里的 `docs/qingang_LiEA12.md`）
-- 跑：grep wiki 找候选相关页 → 一次 mimo call → 解析 JSON → 输出 stdout
-- 输出：mimo 想做的 wiki 改动（JSON 格式）
-- **不写 wiki / 不 git commit** —— 纯 read-only，人工对比 Opus 4.7 已 commit 的 baseline
+**Phase 1.1 module 化**（已完成）：
+```
+service/
+├── __init__.py
+├── __main__.py     # CLI: python -m service digest <source>
+├── config.py       # 路径常量（P4 改 yaml）
+├── prompts.py      # DIGEST_SYSTEM_PROMPT
+├── llm.py          # OpenAI-compat client wrapper (mimo / openai / ...)
+├── retriever.py    # find_candidate_pages + build_user_prompt
+├── validator.py    # parse_json_lenient + validate_digest_output
+├── staging.py      # apply_edits_to_staging + frontmatter merge
+└── digest.py       # digest_source() 入口函数
+```
+
+**Phase 1.2 后续**（未做）：
+- reviewer pass (2nd LLM call audits 1st output)
+- retry loop on schema validate fail
+- 实写 production wiki + git commit
+- CLI 加 review / commit subcommand
 
 ## How to run
 
 ```bash
-/home/leon/llm-wiki/.venv-mcp/bin/python3 /home/leon/memex/spike_digest.py
+cd /home/leon/memex
+/home/leon/llm-wiki/.venv-mcp/bin/python3 -m service digest qingang_LiEA12.md \
+    --write-to-staging --save
 ```
 
-（暂时复用 llm-wiki 仓库的 `.venv-mcp` 环境——它装了 `openai`，够用）
+`--write-to-staging` 把 mimo 输出实际写到 `.staging/`（镜像 wiki/ 结构，不动 production）。
+`--save` 把完整 artifact JSON 落 `.spike_output_*.json`。
+
+（暂时复用 llm-wiki 仓库的 `.venv-mcp` 环境——它装了 `openai` + `fastmcp`，够用）
 
 ## Decision matrix（看完 spike 输出做什么）
 
