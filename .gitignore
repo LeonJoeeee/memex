@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.venv-*/
+*.egg-info/
+
+# spike / dev artifacts
+.spike_output_*.json
+*.log
+logs/
+
+# OS
+.DS_Store
+
+# secrets
+.env
+.env.local
