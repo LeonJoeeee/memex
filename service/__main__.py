@@ -1,11 +1,10 @@
 """memex CLI entry — python -m service <subcommand>
 
 Subcommands:
-    digest <source>    — digest a docs/X.md → JSON spec (+ optional staging)
-    [TODO P1.2] review <source>   — run reviewer pass on cached digest
-    [TODO P1.3] commit <source>   — promote staging → production wiki + git commit
-    [TODO P2]   query <question>  — RAG synthesis query
-    [TODO P2]   serve             — start MCP server
+    digest <source>   — digest a docs/X.md → JSON spec (+ optional staging + reviewer)
+    commit <source>   — promote staging → production wiki + git commit
+    [TODO P2] query <question>  — RAG synthesis query
+    [TODO P2] serve             — start MCP server
 """
 from __future__ import annotations
 
@@ -15,6 +14,7 @@ import sys
 
 from .config import DOCS_DIR, STAGING_DIR
 from .digest import DigestResult, digest_source
+from .git_ops import promote_staging_to_production
 from .llm import DEFAULT_MODEL
 
 
@@ -191,11 +191,64 @@ def main():
         help="Retry digest LLM call on schema validation fail (default: 2)",
     )
 
+    p_commit = sub.add_parser(
+        "commit",
+        help="Promote .staging/ → production wiki + git commit (dry-run default)",
+    )
+    p_commit.add_argument(
+        "source", help="Source id for commit message (e.g. qingang_LiEA12.md)"
+    )
+    p_commit.add_argument(
+        "--apply", action="store_true",
+        help="Actually copy files + git commit (otherwise dry-run)",
+    )
+    p_commit.add_argument(
+        "--message", default=None, help="Custom commit message (else auto)"
+    )
+
     args = ap.parse_args()
 
     if args.cmd == "digest":
         return cmd_digest(args)
+    if args.cmd == "commit":
+        return cmd_commit(args)
     return 1
+
+
+def cmd_commit(args) -> int:
+    eprint(f"=== Promote staging → production for {args.source} ===")
+    eprint(f"Mode: {'APPLY (real)' if args.apply else 'DRY-RUN'}")
+    result = promote_staging_to_production(
+        source_id=args.source,
+        commit_message=args.message,
+        dry_run=not args.apply,
+    )
+
+    print("=" * 60)
+    print("FILES")
+    print("=" * 60)
+    for p in result.promoted:
+        marker = "WOULD COPY" if result.dry_run else "COPIED"
+        print(f"  {marker}  {p}")
+    for p in result.skipped:
+        print(f"  SKIPPED     {p}")
+    for e in result.errors:
+        print(f"  WARN/ERROR  {e}")
+
+    if result.diff_summary:
+        print("\n" + "=" * 60)
+        print("DIFF SUMMARY" if result.dry_run else "COMMIT STAT")
+        print("=" * 60)
+        print(result.diff_summary)
+
+    if result.commit_hash:
+        print(f"\nCommit: {result.commit_hash}")
+        print("NOT pushed (run `git push` manually if intended).")
+    elif not result.dry_run and result.promoted:
+        print("\n⚠️ Files copied but commit failed (see errors)")
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
