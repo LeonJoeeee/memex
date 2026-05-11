@@ -30,6 +30,7 @@ from .config import DOCS_DIR, INDEX_FILE, LLMWIKI_ROOT, MEMEX_ROOT, WIKI_DIR
 from .digest import digest_source
 from .git_ops import promote_staging_to_production
 from .llm import DEFAULT_MODEL
+from .query import query_wiki as _query_wiki
 
 mcp = FastMCP("memex")
 
@@ -74,7 +75,14 @@ memex 是个人知识 specialist agent service（外置大脑）。
 2. Sources feed concepts
 3. No source-specific pages
 
-## Read tools (P2.2)
+## Query / RAG (P2.3) ⭐ 主用
+
+- **wiki_query(question, depth)** — **caller 拿到综合答案，不污染 context**
+    server 内部 retrieve + mimo synth → returns
+    {answer, citations, confidence, related_pages, follow_up_questions, gaps}
+    depth: "quick" (~30s) | "deep" (~60s)
+
+## Read tools (P2.2，原料级)
 
 - **wiki_search(query, budget)** — grep wiki/，budget: "quick" | "deep"
 - **wiki_read(paths)** — 读完整 wiki 页（接受 str 或 list[str]）
@@ -233,6 +241,41 @@ def wiki_apply_staging(
         out["next_step"] = "Nothing to apply (no staging files?)."
 
     return out
+
+
+# ---------------------- Query / RAG (P2.3) ----------------------
+
+
+@mcp.tool
+def wiki_query(question: str, depth: str = "quick") -> dict[str, Any]:
+    """RAG synthesis: 基于 wiki 内容综合答案，**不污染 caller context**。
+
+    Caller 提问 → memex 内部 grep wiki 找相关页 → mimo 综合 → 返回 answer。
+    Caller 拿到 answer 直接呈现给 end user，不必再读 wiki markdown。
+
+    Args:
+        question: 用户问题（中文 / 英文 / 混合）
+        depth: "quick" (top-5 pages，~30s) | "deep" (top-12 pages，~60s)
+
+    Returns dict:
+        - answer:              markdown 答案 (含 inline citation)
+        - citations:           ["wiki/concepts/X.md", ...]
+        - confidence:          "high" | "medium" | "low"
+        - related_pages:       可继续探索的相关页
+        - follow_up_questions: caller 可能追问的 1-3 个问题
+        - gaps:                wiki 未涵盖的 sub-topic
+        - candidates_count:    debug — retriever 找到几页
+
+    使用场景:
+        - caller agent 收到用户专业问题 → wiki_query → 拿到答案 → 给用户
+        - **省 caller 的 context**：不用读 5-10 页 wiki markdown 自己拼
+    """
+    if depth not in ("quick", "deep"):
+        depth = "quick"
+    try:
+        return _query_wiki(question, depth=depth)
+    except Exception as e:
+        return {"error": f"query failed: {e!r}", "question": question}
 
 
 # ---------------------- Read tools (P2.2) ----------------------
