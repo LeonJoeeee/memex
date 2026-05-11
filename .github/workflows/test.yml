@@ -1,0 +1,61 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system deps (ripgrep)
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+      - name: Verify CLI imports
+        run: |
+          python -c "from service.mcp_server import mcp; print('OK')"
+          python -m service --help
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build docker image
+        run: docker build -t memex:test .
+      - name: Smoke test container
+        run: |
+          docker run --rm -d --name memex-test \
+            -p 127.0.0.1:18766:18766 \
+            -e MEMEX_API_KEY="fake-key-for-startup-only" \
+            -e MEMEX_BASE_URL="http://localhost:9999" \
+            memex:test
+          sleep 5
+          # MCP initialize should respond even without real LLM
+          curl -s -X POST http://127.0.0.1:18766/mcp \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            | grep -q '"protocolVersion"'
+          docker stop memex-test
