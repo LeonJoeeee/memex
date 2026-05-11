@@ -17,16 +17,24 @@ Phase 2.2 (TODO):
 """
 from __future__ import annotations
 
-from typing import Any
+import json
+import re
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, Union
 
 from fastmcp import FastMCP
 
-from .config import DOCS_DIR
+from .config import DOCS_DIR, INDEX_FILE, LLMWIKI_ROOT, MEMEX_ROOT, WIKI_DIR
 from .digest import digest_source
 from .git_ops import promote_staging_to_production
 from .llm import DEFAULT_MODEL
 
 mcp = FastMCP("memex")
+
+# Pending query log file（外部 client search miss 时记录）
+_PENDING_FILE = MEMEX_ROOT / ".pending_queries.jsonl"
 
 
 @mcp.tool
@@ -66,10 +74,17 @@ memex 是个人知识 specialist agent service（外置大脑）。
 2. Sources feed concepts
 3. No source-specific pages
 
-## Read 能力
+## Read tools (P2.2)
 
-Phase 2.1 only ingest；read（wiki_search / wiki_read 等）仍走 llm-wiki
-旧 server (18765 端口)。Phase 2.2 将统一到这里。
+- **wiki_search(query, budget)** — grep wiki/，budget: "quick" | "deep"
+- **wiki_read(paths)** — 读完整 wiki 页（接受 str 或 list[str]）
+- **wiki_index(filter)** — INDEX.md 内容（filter: concepts/entities/...）
+- **wiki_status(target)** — None=kanban; "docs/X.md"=lifecycle; "wiki/X.md"=source-of
+
+## Coverage 信号
+
+`wiki_search` 返回时含 coverage="high/medium/low/miss"。
+低 coverage → 自动 log 到 pending queue → 下次 owner session 检查。
 """
 
 
@@ -218,6 +233,208 @@ def wiki_apply_staging(
         out["next_step"] = "Nothing to apply (no staging files?)."
 
     return out
+
+
+# ---------------------- Read tools (P2.2) ----------------------
+
+
+@mcp.tool
+def wiki_search(query: str, budget: str = "quick") -> str:
+    """Search the wiki for `query`. budget: "quick" or "deep".
+
+    quick: titles + frontmatter + 3 max-count per file
+    deep:  full-text + 2-line context around matches
+
+    Coverage signal in output. Misses are logged to pending queue.
+    """
+    if budget not in ("quick", "deep"):
+        budget = "quick"
+
+    flags = ["-i", "-n", "--type-add", "wiki:*.md", "-twiki"]
+    if budget == "quick":
+        flags += ["--max-count", "3"]
+    else:
+        flags += ["-C", "2"]
+
+    # Multi-word query → OR regex
+    words = query.split()
+    pattern = (
+        "(" + "|".join(re.escape(w) for w in words) + ")"
+        if len(words) > 1 else query
+    )
+
+    try:
+        out = subprocess.run(
+            ["rg", *flags, "--", pattern, str(WIKI_DIR)],
+            capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return f"Search timed out for query: {query!r}"
+    except FileNotFoundError:
+        return "ripgrep (rg) not found."
+
+    if out.returncode == 1:
+        _log_pending(query, hit_quality="miss")
+        return (
+            f"No matches for {query!r}. Query logged to pending queue."
+        )
+
+    raw_lines = out.stdout.splitlines()
+    truncated_note = ""
+    if len(raw_lines) > 200:
+        truncated_note = (
+            f"\n... ({len(raw_lines) - 200} more lines truncated)"
+        )
+        raw_lines = raw_lines[:200]
+
+    body = "\n".join(raw_lines)
+    distinct_files = len({ln.split(":", 1)[0] for ln in raw_lines if ":" in ln})
+    coverage = "high" if distinct_files >= 3 else ("medium" if distinct_files >= 1 else "low")
+    if coverage == "low":
+        _log_pending(query, hit_quality="thin")
+
+    return (
+        f"# Wiki search: {query}\n\n"
+        f"budget: {budget} | coverage: {coverage} | matched files: {distinct_files}\n\n"
+        f"```\n{body}{truncated_note}\n```\n"
+    )
+
+
+@mcp.tool
+def wiki_read(paths: Union[str, list[str]]) -> str:
+    """Read full content of wiki page(s). paths: str or list[str].
+
+    Accepts: "wiki/concepts/X.md" / "concepts/X.md" / "X.md" (will search common subdirs).
+    """
+    if isinstance(paths, str):
+        paths = [paths]
+    chunks: list[str] = []
+    for p in paths:
+        full = _resolve_wiki_path(p)
+        if full is None:
+            chunks.append(f"# Not found: {p}\n")
+            continue
+        try:
+            content = full.read_text(encoding="utf-8")
+        except OSError as e:
+            chunks.append(f"# Read error: {p}: {e}\n")
+            continue
+        cl = content.splitlines()
+        if len(cl) > 2000:
+            content = "\n".join(cl[:2000]) + (
+                f"\n\n... ({len(cl) - 2000} more lines truncated)"
+            )
+        rel = full.relative_to(LLMWIKI_ROOT)
+        chunks.append(f"# {rel}\n\n{content}\n")
+    return "\n\n---\n\n".join(chunks)
+
+
+@mcp.tool
+def wiki_index(filter: str | None = None) -> str:
+    """Return wiki INDEX. filter: concepts/entities/comparisons/archived/None."""
+    if not INDEX_FILE.exists():
+        return "INDEX.md not found."
+    content = INDEX_FILE.read_text(encoding="utf-8")
+    if filter is None:
+        return content
+    f = filter.strip("/").lower()
+    valid = {"concepts", "entities", "comparisons", "archived"}
+    if f not in valid:
+        return f"Unknown filter {filter!r}. Use one of: {sorted(valid)}."
+    needle = f"wiki/{f}/"
+    matched = [ln for ln in content.splitlines() if needle in ln]
+    if not matched:
+        return f"No entries with `{needle}` in INDEX."
+    return f"# wiki/{f}/ ({len(matched)} entries)\n\n" + "\n".join(matched)
+
+
+@mcp.tool
+def wiki_status(target: str | None = None) -> str:
+    """Pipeline state.
+
+    - None: kanban (lifecycle overview)
+    - "docs/X.md": lifecycle of a source
+    - "wiki/X.md": which sources fed this page
+    """
+    state_py = LLMWIKI_ROOT / "tools" / "state.py"
+    if target is None:
+        cmd = ["python3", str(state_py), "kanban"]
+    elif target.startswith("wiki/"):
+        cmd = ["python3", str(state_py), "source-of", target]
+    elif target.startswith("docs/") or target.startswith("raw/"):
+        cmd = ["python3", str(state_py), "lifecycle", target]
+    else:
+        return (
+            f"Unrecognized target: {target!r}. "
+            f"Use 'docs/X.md' for lifecycle, 'wiki/X.md' for source-of, or omit for kanban."
+        )
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return "state.py timed out."
+    body = out.stdout or "(no output)"
+    if out.stderr:
+        body += f"\n\n--stderr--\n{out.stderr}"
+    return f"```\n{body}\n```"
+
+
+@mcp.tool
+def wiki_pending() -> str:
+    """List queries that hit miss/thin coverage and are queued for enrichment."""
+    if not _PENDING_FILE.exists():
+        return "No pending queries."
+    text = _PENDING_FILE.read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return "No pending queries."
+    rows = []
+    for ln in lines:
+        try:
+            r = json.loads(ln)
+            rows.append(
+                f"- `{r.get('ts','?')}` — `{r.get('hit_quality','?')}` — "
+                f"{r.get('query','?')}"
+            )
+        except json.JSONDecodeError:
+            continue
+    shown = rows[-50:]
+    suffix = (
+        f"\n\n_(showing latest 50 of {len(rows)})_" if len(rows) > 50 else ""
+    )
+    return f"# Pending queries ({len(rows)})\n\n" + "\n".join(shown) + suffix
+
+
+def _resolve_wiki_path(p: str) -> Path | None:
+    """Resolve user-provided path against repo root with fallbacks."""
+    p = p.lstrip("/")
+    if not p.endswith(".md"):
+        p = p + ".md"
+    candidates = [
+        LLMWIKI_ROOT / p,
+        WIKI_DIR / p,
+        WIKI_DIR / "concepts" / Path(p).name,
+        WIKI_DIR / "entities" / Path(p).name,
+        WIKI_DIR / "comparisons" / Path(p).name,
+        WIKI_DIR / "archived" / Path(p).name,
+    ]
+    for c in candidates:
+        if c.exists() and c.is_file():
+            return c
+    return None
+
+
+def _log_pending(query: str, hit_quality: str) -> None:
+    rec = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "query": query,
+        "hit_quality": hit_quality,
+    }
+    _PENDING_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with _PENDING_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+# ---------------------- entry ----------------------
 
 
 def main():

@@ -9,6 +9,7 @@ __pycache__/
 # spike / dev artifacts
 .spike_output_*.json
 .staging/
+.pending_queries.jsonl
 *.log
 logs/
 
