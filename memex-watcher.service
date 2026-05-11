@@ -1,0 +1,17 @@
+[Unit]
+Description=memex file watcher (raw/ auto-digest pipeline)
+Documentation=https://github.com/LeonJoeeee/memex
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/leon/memex
+ExecStart=/home/leon/llm-wiki/.venv-mcp/bin/python3 -m service.watcher
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

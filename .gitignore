@@ -10,6 +10,7 @@ __pycache__/
 .spike_output_*.json
 .staging/
 .pending_queries.jsonl
+.pending_applies.jsonl
 *.log
 logs/
 

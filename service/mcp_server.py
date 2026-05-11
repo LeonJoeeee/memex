@@ -454,6 +454,48 @@ def wiki_pending() -> str:
     return f"# Pending queries ({len(rows)})\n\n" + "\n".join(shown) + suffix
 
 
+@mcp.tool
+def wiki_pending_applies() -> str:
+    """List staging digest 结果待 apply 到 production wiki 的队列.
+
+    File watcher (P2.4) 检测到 raw/ 新文件后自动 preprocess + digest +
+    写 .staging/，但 default 不 auto-apply。Owner 可通过此 tool 看队列，
+    然后调 wiki_apply_staging(source, apply=True) 真应用。
+    """
+    pending_file = MEMEX_ROOT / ".pending_applies.jsonl"
+    if not pending_file.exists():
+        return "No pending applies."
+    text = pending_file.read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return "No pending applies."
+    rows = []
+    for ln in lines:
+        try:
+            r = json.loads(ln)
+            res = r.get("result", {})
+            d = res.get("stages", {}).get("digest", {})
+            verdict = d.get("verdict", "?") if isinstance(d, dict) else "?"
+            edits = d.get("edits_count", "?") if isinstance(d, dict) else "?"
+            staged = len(d.get("staging_files", [])) if isinstance(d, dict) else "?"
+            rows.append(
+                f"- `{r.get('ts','?')}` — {r.get('source','?')} — "
+                f"verdict={verdict} edits={edits} staged_files={staged}"
+            )
+        except json.JSONDecodeError:
+            continue
+    shown = rows[-50:]
+    suffix = (
+        f"\n\n_(showing latest 50 of {len(rows)})_" if len(rows) > 50 else ""
+    )
+    return (
+        f"# Pending applies ({len(rows)})\n\n"
+        + "\n".join(shown)
+        + suffix
+        + "\n\nApply with: wiki_apply_staging(source, apply=True)"
+    )
+
+
 def _resolve_wiki_path(p: str) -> Path | None:
     """Resolve user-provided path against repo root with fallbacks."""
     p = p.lstrip("/")
