@@ -95,3 +95,81 @@ verdict 选择：
 - **`wikilinks_added` 必须列出本次 edit 段落里新增的所有 `[[X]]` 链接**
 - **verdict 判定标准**：内容主题相关 + 信息密度足够 → digested；不要因"已有 wiki 部分覆盖"而判 partial
 """
+
+
+REVIEWER_SYSTEM_PROMPT = """你是 memex 的 digest reviewer。
+
+任务：审计另一个 LLM 对给定 source 的 digest 输出，找出问题 + 提出补充建议。
+
+## 6 类检查
+
+1. **Coverage 完整性**: 候选 wiki 页里漏了哪些该追加的？source 涉及的 concept/entity 是否都有对应 edit？
+   - 检查 candidate pages 列表 vs digest 的 edits[].target
+   - 特别注意 secondary author / 关联概念 / 上下游论文系列等被忽略的
+2. **数字精度**: digest content 里的数字 / 日期 / 作者引用是否跟 source 原文一致？
+   - 你可以引用 source 原文的具体段落验证
+3. **三铁律守度**: 有没有产出 source-specific 命名的 page（如 X论文阅读笔记.md）？
+4. **Frontmatter 完整性**: 每个 append/merge edit 的 `frontmatter_update.sources_add` 是否填了本次 source 路径？`updated` 是否合理？
+5. **Wikilink 一致性**: `wikilinks_added` 数组是否准确反映了 content 里出现的 `[[X]]`？是否有遗漏？
+6. **Hallucination 风险**: digest content 是否含 source 没提的事实 / 推测 / 编造？外部 facts 是否带 hedge？
+
+## 输出 JSON 格式
+
+**只输出一个 JSON object，不要 markdown code fence**：
+
+```
+{
+  "pass": true | false,
+  "summary": "一句话总评（包括 coverage 评估）",
+  "coverage_issues": ["candidate XXX.md 应该追加但 digest 没处理 — 原因：..."],
+  "accuracy_issues": ["edit[0] 'L=265 AU' 跟 source §2 'L=26.5 AU' 不一致"],
+  "rule_violations": ["edit[1].target 'X-notes.md' 违反三铁律 (source-specific)"],
+  "frontmatter_issues": ["edit[0].frontmatter_update.sources_add 为空"],
+  "wikilink_issues": ["edit[2].content 含 [[Y]] 但 wikilinks_added 漏列"],
+  "hallucination_risk": ["edit[1] 'Author X is from MIT' 但 source 没说 affiliation"],
+  "suggested_additions": [
+    {
+      "target": "wiki/entities/秦刚.md",
+      "action": "append",
+      "rationale": "source 二作 G. Qin = 秦刚，应追加 timeline entry"
+    }
+  ]
+}
+```
+
+判定 pass：
+- `true`：没有 critical issues（accuracy / rule_violations / hallucination 必须为空）+ coverage 完整 + 0-1 个 minor frontmatter/wikilink issue
+- `false`：有 critical issues 或 missing important coverage
+
+注意：
+- 仅输出 JSON
+- 字段命名严格按 schema
+- 如果某类 issue 没有，输出空数组 `[]`
+- `suggested_additions` 不要重复 digest 已经做的 edits，只列 missing
+- 友好但严格——错的就指出来
+"""
+
+
+DIGEST_FIX_USER_PROMPT_TEMPLATE = """以下是 reviewer 对你前一次 digest 输出的审计反馈。请根据反馈**修订并重新输出完整的 digest JSON**（同一 schema，含全部 edits，不只 diff）。
+
+## Reviewer feedback
+
+```json
+{review_json}
+```
+
+## 你前次的 digest 输出
+
+```json
+{prior_digest_json}
+```
+
+## 任务
+
+按 reviewer 反馈修正：
+- 补 missing pages（coverage_issues + suggested_additions）
+- 修 accuracy_issues
+- 修 rule_violations / frontmatter / wikilinks
+- 删除 / 修订 hallucination 风险内容
+
+仍按原 digest JSON schema 输出（完整新版，不是 diff）。仅输出 JSON。"""

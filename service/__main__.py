@@ -20,11 +20,15 @@ from .llm import DEFAULT_MODEL
 
 def cmd_digest(args) -> int:
     eprint(f"=== Digesting {args.source} ===")
+    if args.review:
+        eprint("(reviewer pass enabled)")
     try:
         result = digest_source(
             args.source,
             model=args.model,
             write_to_staging=args.write_to_staging,
+            with_reviewer=args.review,
+            max_retries=args.max_retries,
         )
     except FileNotFoundError as e:
         eprint(f"ERROR: {e}")
@@ -100,6 +104,27 @@ def print_digest_summary(r: DigestResult):
         for c in caveat:
             print(f"  - {c}")
 
+    if r.review is not None:
+        print("\n" + "=" * 60)
+        print(f"REVIEWER PASS (applied={r.review_applied})")
+        print("=" * 60)
+        print(f"Pass: {r.review.get('pass')}")
+        print(f"Summary: {r.review.get('summary', '')}")
+        for cat in (
+            "coverage_issues", "accuracy_issues", "rule_violations",
+            "frontmatter_issues", "wikilink_issues", "hallucination_risk",
+        ):
+            issues = r.review.get(cat, [])
+            if issues:
+                print(f"\n{cat} ({len(issues)}):")
+                for i in issues:
+                    print(f"  - {i}")
+        suggested = r.review.get("suggested_additions", [])
+        if suggested:
+            print(f"\nsuggested_additions ({len(suggested)}):")
+            for s in suggested:
+                print(f"  - [{s.get('action', '?')}] {s.get('target')}: {s.get('rationale', '')}")
+
     if r.staging_result:
         print("\n" + "=" * 60)
         print(f"STAGING ({STAGING_DIR})")
@@ -156,6 +181,14 @@ def main():
     p_digest.add_argument(
         "--raw-to-stdout", action="store_true",
         help="Also print raw LLM output to stdout",
+    )
+    p_digest.add_argument(
+        "--review", action="store_true",
+        help="Run reviewer pass + fix call after first digest",
+    )
+    p_digest.add_argument(
+        "--max-retries", type=int, default=2,
+        help="Retry digest LLM call on schema validation fail (default: 2)",
     )
 
     args = ap.parse_args()
