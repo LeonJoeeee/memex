@@ -91,6 +91,8 @@ memex 是个人知识 specialist agent service（外置大脑）。
 - **wiki_read(paths)** — 读完整 wiki 页（接受 str 或 list[str]）
 - **wiki_index(filter)** — INDEX.md 内容（filter: concepts/entities/...）
 - **wiki_status(target)** — None=kanban; "docs/X.md"=lifecycle; "wiki/X.md"=source-of
+- **wiki_recent_changes(n)** — 最近 N 个 wiki/ git commit
+- **wiki_stats()** — 总页数 / 主题分布 / 字数 / 最大 5 页 / 最近 commit
 
 ## Coverage 信号
 
@@ -454,6 +456,121 @@ def wiki_pending() -> str:
         f"\n\n_(showing latest 50 of {len(rows)})_" if len(rows) > 50 else ""
     )
     return f"# Pending queries ({len(rows)})\n\n" + "\n".join(shown) + suffix
+
+
+@mcp.tool
+def wiki_recent_changes(n: int = 10) -> str:
+    """最近 N 个 wiki commit（git log 输出）。
+
+    Args:
+        n: 数量（默认 10，最大 50）
+
+    返回 markdown 列出 commit hash / 时间 / 一行 message / 改动文件数。
+    """
+    n = max(1, min(n, 50))
+    cmd = [
+        "git", "-C", str(LLMWIKI_ROOT),
+        "log", f"-{n}", "--pretty=format:%h|%ai|%s", "--shortstat",
+        "--", "wiki/",
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return "git log timed out."
+
+    if out.returncode != 0:
+        return f"git log failed: {out.stderr.strip()[:300]}"
+
+    lines = out.stdout.strip().splitlines()
+    rows = []
+    current: dict[str, Any] = {}
+    for ln in lines:
+        if "|" in ln and ln.count("|") >= 2:
+            if current:
+                rows.append(current)
+            parts = ln.split("|", 2)
+            current = {"hash": parts[0], "time": parts[1], "subj": parts[2]}
+        elif ln.strip().startswith(tuple(str(i) for i in range(10))):
+            # shortstat line: " 3 files changed, 80 insertions(+), 2 deletions(-)"
+            current["stat"] = ln.strip()
+    if current:
+        rows.append(current)
+
+    if not rows:
+        return f"No commits touching wiki/ in last {n}."
+
+    out_lines = [f"# Recent wiki/ changes (last {len(rows)})\n"]
+    for r in rows:
+        stat = r.get("stat", "")
+        out_lines.append(f"- `{r['hash']}` {r['time'][:10]} **{r['subj']}**")
+        if stat:
+            out_lines.append(f"  {stat}")
+    return "\n".join(out_lines)
+
+
+@mcp.tool
+def wiki_stats() -> dict[str, Any]:
+    """Wiki 总览统计：页数 / 总字数 / 主题分布 / 最大页 top 5.
+
+    Returns dict with:
+        - total_pages: 总 wiki 页数
+        - by_type: {concepts: N, entities: N, ...}
+        - total_bytes: 总字节
+        - total_lines: 总行数
+        - top_5_pages: 最大 5 页 (lines, path)
+        - last_commit: 最近 wiki/ commit hash + 时间
+    """
+    counts: dict[str, int] = {}
+    total_bytes = 0
+    total_lines = 0
+    page_sizes: list[tuple[int, str]] = []
+
+    for p in WIKI_DIR.rglob("*.md"):
+        if not p.is_file():
+            continue
+        # 分类（concepts / entities / comparisons / archived）
+        try:
+            rel = p.relative_to(WIKI_DIR)
+            top = rel.parts[0] if rel.parts else "root"
+        except ValueError:
+            top = "unknown"
+        counts[top] = counts.get(top, 0) + 1
+
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        total_bytes += len(text.encode("utf-8"))
+        n_lines = len(text.splitlines())
+        total_lines += n_lines
+        page_sizes.append((n_lines, str(p.relative_to(LLMWIKI_ROOT))))
+
+    page_sizes.sort(reverse=True)
+    top_5 = [{"lines": n, "path": p} for n, p in page_sizes[:5]]
+
+    # last commit on wiki/
+    last_commit = None
+    try:
+        cmd = [
+            "git", "-C", str(LLMWIKI_ROOT),
+            "log", "-1", "--pretty=format:%h|%ai|%s",
+            "--", "wiki/",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            parts = r.stdout.strip().split("|", 2)
+            last_commit = {"hash": parts[0], "time": parts[1], "subj": parts[2]}
+    except subprocess.TimeoutExpired:
+        pass
+
+    return {
+        "total_pages": sum(counts.values()),
+        "by_type": counts,
+        "total_bytes": total_bytes,
+        "total_lines": total_lines,
+        "top_5_pages": top_5,
+        "last_commit": last_commit,
+    }
 
 
 @mcp.tool
