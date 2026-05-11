@@ -1,0 +1,17 @@
+[Unit]
+Description=memex MCP server (ingest + apply for personal knowledge wiki)
+Documentation=https://github.com/LeonJoeeee/memex
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/leon/memex
+ExecStart=/home/leon/llm-wiki/.venv-mcp/bin/python3 -m service.mcp_server --http 18766
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
