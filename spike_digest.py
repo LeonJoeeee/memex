@@ -114,6 +114,11 @@ verdict 选择：
 - 仅输出 JSON，字段命名严格按上面 schema
 - 中文内容直接用中文，UTF-8
 - `content` 字段是 markdown，含完整 frontmatter（create 时）或纯追加段（append 时）
+- **重要：JSON 字符串里如果含英文 `"`，必须 escape 为 `\\"`；或改用中文 `"` `"` `"`**
+- **`feeds` 列表必须列出所有被改动的 wiki 页，与 `edits[].target` 数量一致**
+- **`frontmatter_update.sources_add` 必须填入本次 source 路径，例如 `["docs/qingang_LiEA12.md"]`**
+- **`wikilinks_added` 必须列出本次 edit 段落里新增的所有 `[[X]]` 链接**
+- **verdict 判定标准**：内容主题相关 + 信息密度足够 → digested；不要因"已有 wiki 部分覆盖"而判 partial
 """
 
 
@@ -193,18 +198,28 @@ def build_user_prompt(source_path: Path, candidates: list[Path]) -> str:
 def call_mimo(system: str, user: str, model: str) -> str:
     api_key, base_url = load_mimo_env()
     client = OpenAI(api_key=api_key, base_url=base_url)
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    # 优先 json_object mode，让 OpenAI-compat endpoint 强制合法 JSON
+    try:
+        resp = client.chat.completions.create(
+            model=model, messages=messages,
+            response_format={"type": "json_object"},
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if any(k in msg for k in ("response_format", "not support", "unsupported")):
+            eprint(f"(mimo doesn't support response_format, falling back: {e!r})")
+            resp = client.chat.completions.create(model=model, messages=messages)
+        else:
+            raise
     return resp.choices[0].message.content or ""
 
 
 def strip_markdown_fence(text: str) -> str:
-    """剥离 ```json ... ``` 包裹（如果 mimo 不听话加了 fence）"""
+    """剥离 ```json ... ``` 包裹"""
     t = text.strip()
     if not t.startswith("```"):
         return t
@@ -214,6 +229,64 @@ def strip_markdown_fence(text: str) -> str:
     if lines and lines[-1].strip() == "```":
         lines = lines[:-1]
     return "\n".join(lines).strip()
+
+
+def parse_json_lenient(text: str) -> dict:
+    """Robust JSON parse: 先 strict，失败则尝试修常见 escape 问题"""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Fallback 1: 把 string 内部未 escape 的英文 " 替换为 \"
+    fixed = _escape_inner_quotes(text)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+    # Fallback 2: 用 raw_decode 找最大可解析前缀
+    try:
+        decoder = json.JSONDecoder()
+        obj, _ = decoder.raw_decode(text)
+        return obj
+    except json.JSONDecodeError as e:
+        raise e
+
+
+def _escape_inner_quotes(s: str) -> str:
+    """简化版：扫描 JSON，把出现在 string 内部的未 escape `"` 替换为 `\\"`。
+    State machine: in_string / escape / outside。
+    """
+    out = []
+    in_string = False
+    escape = False
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if escape:
+            out.append(c)
+            escape = False
+        elif c == "\\":
+            out.append(c)
+            escape = True
+        elif c == '"':
+            if not in_string:
+                in_string = True
+                out.append(c)
+            else:
+                # 看后面是否是合法的 string 结束（, : } ] 等）
+                j = i + 1
+                while j < len(s) and s[j] in " \t\n\r":
+                    j += 1
+                if j >= len(s) or s[j] in ",:}]\n":
+                    in_string = False
+                    out.append(c)
+                else:
+                    # 内嵌未 escape `"`，替换
+                    out.append('\\"')
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 # ---------------------- validation ----------------------
@@ -319,10 +392,10 @@ def main():
 
     cleaned = strip_markdown_fence(raw)
     try:
-        parsed = json.loads(cleaned)
+        parsed = parse_json_lenient(cleaned)
     except json.JSONDecodeError as e:
         print("\n" + "=" * 60)
-        print("JSON PARSE FAILED")
+        print("JSON PARSE FAILED (even with lenient fallback)")
         print("=" * 60)
         print(f"Error: {e}")
         if args.save:
