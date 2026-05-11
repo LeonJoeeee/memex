@@ -1,0 +1,50 @@
+# memex.yaml — 个人 memex 实例配置示例
+# 复制到 memex.yaml 或 ~/.config/memex/memex.yaml 并改你自己的值。
+# 任何字段都可被环境变量覆盖。
+
+# ----- Wiki 数据 -----
+wiki:
+  # wiki repo 根目录。你的 wiki/, docs/, raw/, INDEX.md 都在这下面。
+  # 建议是一个独立 git repo（memex 会 commit 进去）。
+  path: /home/leon/llm-wiki              # env override: MEMEX_WIKI_PATH
+
+  # 子目录名（一般不必改）
+  # docs_subdir: docs
+  # wiki_subdir: wiki
+  # raw_subdir: raw
+  # index_file: INDEX.md
+
+
+# ----- LLM provider -----
+llm:
+  # OpenAI-compat endpoint。任何兼容 OpenAI Chat Completions API 的 provider 都行。
+  base_url: https://token-plan-sgp.xiaomimimo.com/v1   # env: MEMEX_BASE_URL
+
+  # memex 从这个环境变量读 API key（推荐方式，key 不进 yaml）
+  api_key_env: XIAOMI_API_KEY                         # env: MEMEX_API_KEY_ENV
+  # 或直接给 key（不推荐，会进 git）—— 用 env MEMEX_API_KEY 即可不进 yaml
+
+  # 默认 model name
+  default_model: mimo-v2.5                            # env: MEMEX_DEFAULT_MODEL
+
+  # 几个 provider 候选（取消注释切换）:
+  # base_url: https://api.openai.com/v1
+  # api_key_env: OPENAI_API_KEY
+  # default_model: gpt-4o-mini
+  #
+  # base_url: https://api.deepseek.com/v1
+  # api_key_env: DEEPSEEK_API_KEY
+  # default_model: deepseek-chat
+
+
+# ----- MCP server -----
+mcp:
+  port: 18766                                          # env: MEMEX_MCP_PORT
+  host: 127.0.0.1                                      # env: MEMEX_MCP_HOST
+
+
+# ----- Retrieval (可选 tuning) -----
+retrieval:
+  candidates: 15            # digest 时找几个候选 wiki 页
+  page_summary_lines: 40    # 每个候选页给 LLM 多少行 frontmatter+开头
+  keyword_max: 25

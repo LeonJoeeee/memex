@@ -26,7 +26,9 @@ from typing import Any, Union
 
 from fastmcp import FastMCP
 
-from .config import DOCS_DIR, INDEX_FILE, LLMWIKI_ROOT, MEMEX_ROOT, WIKI_DIR
+from .config import (
+    DOCS_DIR, INDEX_FILE, LLMWIKI_ROOT, MCP_HOST, MCP_PORT, MEMEX_ROOT, WIKI_DIR,
+)
 from .digest import digest_source
 from .git_ops import promote_staging_to_production
 from .llm import DEFAULT_MODEL
@@ -537,12 +539,12 @@ def main():
     g = parser.add_mutually_exclusive_group()
     g.add_argument("--stdio", action="store_true", help="stdio transport (default)")
     g.add_argument(
-        "--http", nargs="?", const=18766, type=int, metavar="PORT",
-        help="HTTP transport (default port 18766)",
+        "--http", nargs="?", const=MCP_PORT, type=int, metavar="PORT",
+        help=f"HTTP transport (default port {MCP_PORT}, from config)",
     )
     parser.add_argument(
-        "--host", default="127.0.0.1",
-        help="HTTP bind host (default 127.0.0.1)",
+        "--host", default=MCP_HOST,
+        help=f"HTTP bind host (default {MCP_HOST}, from config)",
     )
     args = parser.parse_args()
 

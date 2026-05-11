@@ -28,10 +28,9 @@ from typing import Any
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from .config import DOCS_DIR, LLMWIKI_ROOT, MEMEX_ROOT
+from .config import DOCS_DIR, LLMWIKI_ROOT, MEMEX_ROOT, RAW_DIR
 from .digest import digest_source
 
-RAW_DIR = LLMWIKI_ROOT / "raw"
 PENDING_FILE = MEMEX_ROOT / ".pending_applies.jsonl"
 STABILITY_CHECK_SEC = 5  # 文件 size 这么多秒不变才算 stable
 STABILITY_POLL_SEC = 1

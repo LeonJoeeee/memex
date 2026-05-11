@@ -1,0 +1,14 @@
+# Don't bake runtime state into image
+.git/
+.staging/
+.spike_output_*.json
+.pending_queries.jsonl
+.pending_applies.jsonl
+__pycache__/
+*.pyc
+*.log
+logs/
+.venv*/
+memex.yaml    # user's actual config (mount via volume / env vars)
+.env
+.env.local

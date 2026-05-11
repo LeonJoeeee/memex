@@ -1,28 +1,19 @@
 """LLM client wrapper for memex.
 
-复用 /home/leon/llm-wiki/tools/_env.py 加载 mimo 凭据。
 Provider 中立：mimo / OpenAI / DeepSeek / 任何 OpenAI-compat endpoint。
+凭据 + base_url 通过 service.config 解析 (env var > yaml > legacy fallback)。
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+from openai import OpenAI
 
-# 复用 llm-wiki 的 env loader（暂时硬编码——P1 末改成 config）
-_LLMWIKI_TOOLS = Path("/home/leon/llm-wiki/tools")
-if str(_LLMWIKI_TOOLS) not in sys.path:
-    sys.path.insert(0, str(_LLMWIKI_TOOLS))
-
-from _env import load_mimo_env  # noqa: E402
-from openai import OpenAI  # noqa: E402
-
-
-DEFAULT_MODEL = "mimo-v2.5"
+from .config import DEFAULT_MODEL, get_api_key, get_base_url
 
 
 def get_client() -> OpenAI:
-    """Build an OpenAI-compat client from env (mimo by default)."""
-    api_key, base_url = load_mimo_env()
+    """Build an OpenAI-compat client from resolved config."""
+    api_key = get_api_key()
+    base_url = get_base_url()
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
@@ -36,7 +27,7 @@ def call_llm(
     """Single LLM call. Returns raw text content.
 
     json_mode: 优先 response_format={"type": "json_object"}，
-               不支持则 fallback to 普通 mode（让 caller 自己 parse）。
+               不支持则 fallback 普通 mode。
     """
     if client is None:
         client = get_client()

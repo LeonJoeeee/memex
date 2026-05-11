@@ -1,0 +1,7 @@
+# memex — runtime dependencies
+# Pin to known-working versions; loosen later if needed.
+
+fastmcp>=3.2,<4.0
+openai>=2.0,<3.0
+watchdog>=4.0,<7.0
+PyYAML>=6.0,<7.0
