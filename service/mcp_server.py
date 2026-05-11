@@ -75,12 +75,13 @@ memex 是个人知识 specialist agent service（外置大脑）。
 2. Sources feed concepts
 3. No source-specific pages
 
-## Query / RAG (P2.3) ⭐ 主用
+## Ask the expert ⭐ 主用
 
-- **wiki_query(question, depth)** — **caller 拿到综合答案，不污染 context**
-    server 内部 retrieve + mimo synth → returns
-    {answer, citations, confidence, related_pages, follow_up_questions, gaps}
+- **wiki_ask_expert(question, depth)** — **问 memex 这个专家一个问题**
+    类比：你问一个 AI+空间物理+投资 跨界专家一个问题。
+    memex 在后台调它积累的 wiki，像专家一样综合，给你**专家的回答**。
     depth: "quick" (~30s) | "deep" (~60s)
+    返回 {answer, citations, confidence, related_pages, follow_up_questions, gaps}
 
 ## Read tools (P2.2，原料级)
 
@@ -247,28 +248,34 @@ def wiki_apply_staging(
 
 
 @mcp.tool
-def wiki_query(question: str, depth: str = "quick") -> dict[str, Any]:
-    """RAG synthesis: 基于 wiki 内容综合答案，**不污染 caller context**。
+def wiki_ask_expert(question: str, depth: str = "quick") -> dict[str, Any]:
+    """**问 memex 这个专家一个问题** — 像一个人向另一个有积累的人提问。
 
-    Caller 提问 → memex 内部 grep wiki 找相关页 → mimo 综合 → 返回 answer。
-    Caller 拿到 answer 直接呈现给 end user，不必再读 wiki markdown。
+    memex = 跨界专家 agent（AI 工程 / 空间物理 / 金融投资等，看 wiki 涵盖范围）。
+    wiki 是它的 long-term memory，是它过去消化积累的所有知识。
+
+    工作流（类比人类专家咨询）：
+      caller 提问 → memex 调取相关 wiki → 像专家一样思考综合 → 给答复
+      caller 拿到的是**专家的回答**，不是 raw wiki 内容。
 
     Args:
-        question: 用户问题（中文 / 英文 / 混合）
-        depth: "quick" (top-5 pages，~30s) | "deep" (top-12 pages，~60s)
+        question: 你的问题（中文 / 英文 / 混合）
+        depth: "quick" (~30s) | "deep" (~60s, 看更多 wiki 页综合)
 
     Returns dict:
-        - answer:              markdown 答案 (含 inline citation)
+        - answer:              markdown 答案 (专家回答，含 inline cite)
         - citations:           ["wiki/concepts/X.md", ...]
         - confidence:          "high" | "medium" | "low"
-        - related_pages:       可继续探索的相关页
-        - follow_up_questions: caller 可能追问的 1-3 个问题
-        - gaps:                wiki 未涵盖的 sub-topic
-        - candidates_count:    debug — retriever 找到几页
+        - related_pages:       可继续探索的相关 wiki 页
+        - follow_up_questions: 你可能要追问的 1-3 个问题
+        - gaps:                memex 意识到的 wiki 未充分涵盖的 sub-topic
 
-    使用场景:
-        - caller agent 收到用户专业问题 → wiki_query → 拿到答案 → 给用户
-        - **省 caller 的 context**：不用读 5-10 页 wiki markdown 自己拼
+    跟原料级 tools 的差别:
+        - wiki_search/read: 你要 raw 素材，自己综合
+        - wiki_ask_expert:  问专家，拿专家的答复（不污染你的 context）
+
+    范围边界:
+        memex 只回答 wiki 涵盖范围内的问题。范围外（如 "今天天气"）会明说不知道。
     """
     if depth not in ("quick", "deep"):
         depth = "quick"
